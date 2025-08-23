@@ -21,7 +21,7 @@ API_KEY = os.environ.get('GEMINI_API_KEY')
 # Configure Gemini
 if API_KEY:
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     logger.info("Gemini AI configured successfully")
 else:
     logger.warning("GEMINI_API_KEY not set")
@@ -75,7 +75,7 @@ def webhook():
                 if text.startswith('/'):
                     if text == '/start':
                         response_text = """
-🤖 *Hello! I'm Nivas AI *
+🤖 Hello! I'm Nivas AI
 
 Send me any text message and I'll generate a response.
 
@@ -87,11 +87,12 @@ Just type your message and I'll help you!
                         """
                     elif text == '/help':
                         response_text = """
-ℹ️ *How to use this bot:*
+ℹ️ How to use this bot:
 
 • Just send me any text message
 • I'll respond
 • You can ask questions, get ideas, or just chat!
+*Admin : Message @Learnforrfreee — I'll reply there*
 
 *Commands:*
 /start - Start the bot
@@ -148,3 +149,4 @@ if __name__ == '__main__':
     else:
         # On Render, just run the Flask app
         flask_app.run(host='0.0.0.0', port=5000)
+
