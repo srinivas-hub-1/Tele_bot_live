@@ -1,9 +1,11 @@
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import google.generativeai as genai
-import asyncio
 import os
 import logging
+from flask import Flask, request
+import threading
+import asyncio
 
 # Configure logging
 logging.basicConfig(
@@ -19,7 +21,7 @@ API_KEY = os.environ.get('GEMINI_API_KEY')
 # Configure Gemini model
 if API_KEY:
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-pro')
 else:
     logger.warning("GEMINI_API_KEY not found in environment variables")
 
@@ -34,23 +36,18 @@ def generate_content(prompt: str) -> str:
         logger.error(f"Error generating content: {str(e)}")
         return f"Error: {str(e)}"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def start(update: Update, context: CallbackContext) -> None:
     """Send a welcome message when the command /start is issued."""
     welcome_text = """
 🤖 Hello! I'm your Gemini AI Assistant.
 
 Send me any text message and I'll generate a response using Google's Gemini AI.
 
-Features:
-• AI-powered responses
-• Fast and reliable
-• Always learning
-
 Just type your message and I'll help you!
     """
-    await update.message.reply_text(welcome_text)
+    update.message.reply_text(welcome_text)
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def help_command(update: Update, context: CallbackContext) -> None:
     """Send a help message when the command /help is issued."""
     help_text = """
 ℹ️ How to use this bot:
@@ -62,68 +59,82 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 Commands:
 /start - Start the bot
 /help - Show this help message
-
-No voice messages - text only!
     """
-    await update.message.reply_text(help_text)
+    update.message.reply_text(help_text)
 
-async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def chat(update: Update, context: CallbackContext) -> None:
     """Handle incoming text messages."""
     user_message = update.message.text
     
     # Don't process empty messages
     if not user_message.strip():
-        await update.message.reply_text("Please send a text message to chat!")
+        update.message.reply_text("Please send a text message to chat!")
         return
     
-    # Show typing action
-    async with update.message.chat.action(action='typing'):
-        # Send thinking message
-        thinking_msg = await update.message.reply_text("🤔 Thinking...")
+    thinking_msg = update.message.reply_text("🤔 Thinking...")
+    
+    try:
+        response_text = generate_content(user_message)
         
-        try:
-            # Run the blocking Gemini call in a thread pool
-            response_text = await asyncio.get_event_loop().run_in_executor(
-                None, generate_content, user_message
-            )
+        # Delete the thinking message
+        context.bot.delete_message(chat_id=update.message.chat_id, message_id=thinking_msg.message_id)
+        
+        # Send the response (split if too long for Telegram)
+        if len(response_text) > 4096:
+            for i in range(0, len(response_text), 4096):
+                update.message.reply_text(response_text[i:i+4096])
+        else:
+            update.message.reply_text(response_text)
             
-            # Delete the thinking message
-            await thinking_msg.delete()
-            
-            # Send the response (split if too long for Telegram)
-            if len(response_text) > 4096:
-                for i in range(0, len(response_text), 4096):
-                    await update.message.reply_text(response_text[i:i+4096])
-            else:
-                await update.message.reply_text(response_text)
-                
-        except Exception as e:
-            logger.error(f"Error in chat handler: {str(e)}")
-            await thinking_msg.delete()
-            await update.message.reply_text("Sorry, I encountered an error. Please try again later.")
+    except Exception as e:
+        logger.error(f"Error in chat handler: {str(e)}")
+        update.message.reply_text("Sorry, I encountered an error. Please try again later.")
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def error_handler(update: Update, context: CallbackContext) -> None:
     """Log errors caused by Updates."""
     logger.error(f"Update {update} caused error {context.error}")
 
-# Build the bot application
-def create_application():
-    """Create and configure the Telegram bot application."""
+# Initialize Flask app
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    return "🤖 Telegram Bot with Gemini AI is running!"
+
+@flask_app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle incoming updates from Telegram."""
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(), bot)
+        dispatcher.process_update(update)
+    return "OK"
+
+# Create bot instance
+def create_bot():
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not found in environment variables")
-        raise ValueError("Telegram bot token is required")
+        return None
     
-    application = ApplicationBuilder().token(TOKEN).build()
+    updater = Updater(TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
     
     # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CommandHandler("help", help_command))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, chat))
+    dispatcher.add_error_handler(error_handler)
     
-    # Add error handler
-    application.add_error_handler(error_handler)
-    
-    return application
+    return updater
 
-# Create the application instance
-app = create_application()
+# Global variables for webhook mode
+updater = None
+dispatcher = None
+bot = None
+
+if __name__ == '__main__':
+    # For webhook deployment
+    updater = create_bot()
+    if updater:
+        bot = updater.bot
+        dispatcher = updater.dispatcher
+        # Flask app will be run by gunicorn
