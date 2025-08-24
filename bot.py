@@ -1,6 +1,7 @@
 import os
 import logging
 import requests
+import datetime   # <-- added for cron timestamp
 from flask import Flask, request
 import google.generativeai as genai
 
@@ -117,6 +118,23 @@ Just type your message and I'll help you!
     
     return "Method not allowed", 405
 
+
+# 🔹 NEW CRON ROUTE 🔹
+@flask_app.route('/cron', methods=['GET'])
+def cron_job():
+    """This route will be called every 5 minutes by cron-job.org."""
+    now = datetime.datetime.utcnow()
+
+    # Example action: send yourself a ping on Telegram
+    try:
+        send_telegram_message(5297887521, f"⏰ Cron ran at {now} UTC")
+        logger.info("Cron job executed successfully")
+    except Exception as e:
+        logger.error(f"Cron job failed: {e}")
+
+    return f"Cron job executed at {now} UTC", 200
+
+
 # For local testing with polling
 if __name__ == '__main__':
     if not os.environ.get('RENDER'):
@@ -149,4 +167,3 @@ if __name__ == '__main__':
     else:
         # On Render, just run the Flask app
         flask_app.run(host='0.0.0.0', port=5000)
-
